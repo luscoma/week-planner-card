@@ -253,7 +253,10 @@ export default css`
     }
 
     .container .day .events .event.bridgeContinue {
+        /* This hides the calendar color on a bridge continue, we still pad the
+         * element though to keep sizing consistent. */
         border-left-width: calc(var(--is-row-start, 0) * var(--event-border-width));
+        padding-left: var(--event-border-width);
     }
 
     .container .day .events .event.bridgeContinue .inner,
