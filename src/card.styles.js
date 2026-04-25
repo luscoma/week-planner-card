@@ -146,6 +146,8 @@ export default css`
         position: relative;
         width: calc((100% - (var(--days-columns) - 1) * var(--days-spacing)) / var(--days-columns));
         margin: 0 0 var(--days-spacing) 0;
+        --is-row-end: var(--is-row-end-xl, 0);
+        --is-row-start: var(--is-row-start-xl, 0);
     }
 
     .container .day .date {
@@ -274,6 +276,37 @@ export default css`
         display: none;
     }
 
+    .container .day .events .event.bridgeContinues {
+        position: relative;
+        border-top-right-radius: calc(var(--is-row-end, 0) * var(--event-border-radius));
+        border-bottom-right-radius: calc(var(--is-row-end, 0) * var(--event-border-radius));
+    }
+
+    .container .day .events .event.bridgeContinue {
+        /* This hides the calendar color on a bridge continue, we still pad the
+         * element though to keep sizing consistent. */
+        border-left-width: calc(var(--is-row-start, 0) * var(--event-border-width));
+        padding-left: var(--event-border-width);
+    }
+
+    .container .day .events .event.bridgeContinue .inner,
+    .container .day .events .event.bridgeContinue .additionalColor {
+        opacity: var(--is-row-start, 0);
+    }
+
+    .container .day .events .event.bridgeContinues .icon {
+        opacity: var(--is-row-end, 0);
+    }
+
+    .container .day .events .event.bridgeContinues > .bridge {
+        position: absolute;
+        left: 100%;
+        top: 0;
+        bottom: 0;
+        width: calc((1 - var(--is-row-end, 0)) * var(--days-spacing));
+        background-color: var(--event-background-color);
+    }
+
     .loader {
         position: absolute;
         top: 16px;
@@ -330,15 +363,19 @@ export default css`
     @container weekplanner (width <= 1920px) {
         ha-card .container .day {
             --days-columns: var(--days-columns-lg, 7);
+            --is-row-end: var(--is-row-end-lg, 0);
+            --is-row-start: var(--is-row-start-lg, 0);
         }
         ha-card.compact .container .day {
             --days-columns: var(--days-columns-lg, 7);
         }
     }
-    
+
     @container weekplanner (width <= 1280px) {
         ha-card .container .day {
             --days-columns: var(--days-columns-md, 5);
+            --is-row-end: var(--is-row-end-md, 0);
+            --is-row-start: var(--is-row-start-md, 0);
         }
         ha-card.compact .container .day {
             --days-columns: var(--days-columns-md, 7);
@@ -352,15 +389,19 @@ export default css`
         }
         ha-card .container .day {
             --days-columns: var(--days-columns-sm, 3);
+            --is-row-end: var(--is-row-end-sm, 0);
+            --is-row-start: var(--is-row-start-sm, 0);
         }
         ha-card.compact .container .day {
             --days-columns: var(--days-columns-sm, 4);
         }
     }
-  
+
     @container weekplanner (width <= 640px) {
         ha-card .container .day {
             --days-columns: var(--days-columns-xs, 1);
+            --is-row-end: var(--is-row-end-xs, 0);
+            --is-row-start: var(--is-row-start-xs, 0);
         }
         ha-card.compact .container .day {
             --days-columns: var(--days-columns-xs, 2);
