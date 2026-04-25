@@ -1085,6 +1085,7 @@ export class WeekPlannerCard extends LitElement {
             event.bridgeStart = false;
             event.bridgeContinue = false;
             event.bridgeContinues = false;
+            event._actualSlot = undefined;
         });
 
         if (this._multiDayMode !== 'combined') {
@@ -1096,32 +1097,83 @@ export class WeekPlannerCard extends LitElement {
             visibleDateKeys.push(this._startDate.plus({ days: i }).toISODate());
         }
 
-        visibleDateKeys.forEach(dateKey => {
-            if (!this._events[dateKey]) {
-                return;
-            }
-            this._events[dateKey].sort((a, b) => this._compareEventsForBridge(a, b));
-        });
-
         const groups = {};
         visibleDateKeys.forEach(dateKey => {
             if (!this._events[dateKey]) {
                 return;
             }
-            this._events[dateKey].forEach((eventKey, slot) => {
+            this._events[dateKey].forEach(eventKey => {
                 const event = this._calendarEvents[eventKey];
                 if (!event || !event.multiDay || !event.fullDay) {
                     return;
                 }
                 const groupKey = event.originalStart.toISO() + '|' + event.originalEnd.toISO() + '|' + event.summary;
                 if (!groups[groupKey]) {
-                    groups[groupKey] = [];
+                    groups[groupKey] = {
+                        instances: [],
+                        originalStart: event.originalStart,
+                        originalEnd: event.originalEnd,
+                        summary: event.summary
+                    };
                 }
-                groups[groupKey].push({ dateKey, eventKey, slot });
+                groups[groupKey].instances.push({ dateKey, eventKey });
             });
         });
 
-        Object.values(groups).forEach(instances => {
+        Object.values(groups).forEach(group => {
+            group.instances.sort((a, b) => a.dateKey.localeCompare(b.dateKey));
+        });
+
+        // Stage 1: assign global slots greedily.
+        // Sort by length desc, then originalStart asc, then summary.
+        const groupEntries = Object.entries(groups);
+        groupEntries.sort(([, a], [, b]) => {
+            const lenDiff = b.instances.length - a.instances.length;
+            if (lenDiff !== 0) return lenDiff;
+            const startDiff = a.originalStart.toMillis() - b.originalStart.toMillis();
+            if (startDiff !== 0) return startDiff;
+            return (a.summary || '').localeCompare(b.summary || '');
+        });
+
+        const slotOccupancy = [];
+        const globalSlots = {};
+        groupEntries.forEach(([groupKey, group]) => {
+            const dateKeys = group.instances.map(i => i.dateKey);
+            let slot = 0;
+            while (true) {
+                if (!slotOccupancy[slot]) {
+                    slotOccupancy[slot] = new Set();
+                }
+                const conflict = dateKeys.some(dk => slotOccupancy[slot].has(dk));
+                if (!conflict) {
+                    dateKeys.forEach(dk => slotOccupancy[slot].add(dk));
+                    globalSlots[groupKey] = slot;
+                    break;
+                }
+                slot++;
+            }
+        });
+
+        // Stage 2: per-day compaction. For each day, sort that day's groups by
+        // global slot ascending and assign actual slot = position. Store on each
+        // per-day event instance for use in segment metadata and rendering order.
+        visibleDateKeys.forEach(dateKey => {
+            const dayGroupKeys = [];
+            Object.entries(groups).forEach(([groupKey, group]) => {
+                if (group.instances.some(i => i.dateKey === dateKey)) {
+                    dayGroupKeys.push(groupKey);
+                }
+            });
+            dayGroupKeys.sort((a, b) => globalSlots[a] - globalSlots[b]);
+            dayGroupKeys.forEach((groupKey, actualSlot) => {
+                const inst = groups[groupKey].instances.find(i => i.dateKey === dateKey);
+                inst.actualSlot = actualSlot;
+                this._calendarEvents[inst.eventKey]._actualSlot = actualSlot;
+            });
+        });
+
+        Object.values(groups).forEach(group => {
+            const instances = group.instances;
             instances.forEach((inst, i) => {
                 const event = this._calendarEvents[inst.eventKey];
                 const prev = i > 0 ? instances[i - 1] : null;
@@ -1130,8 +1182,8 @@ export class WeekPlannerCard extends LitElement {
                 const prevAdjacent = prev && this._isAdjacentDate(prev.dateKey, inst.dateKey);
                 const nextAdjacent = next && this._isAdjacentDate(inst.dateKey, next.dateKey);
 
-                const slotMatchesPrev = prev && prev.slot === inst.slot;
-                const slotMatchesNext = next && next.slot === inst.slot;
+                const slotMatchesPrev = prev && prev.actualSlot === inst.actualSlot;
+                const slotMatchesNext = next && next.actualSlot === inst.actualSlot;
 
                 const isSegmentStart = !prev || !prevAdjacent || !slotMatchesPrev;
                 const isSegmentEnd = !next || !nextAdjacent || !slotMatchesNext;
@@ -1228,11 +1280,26 @@ export class WeekPlannerCard extends LitElement {
                 const dateKey = startDate.toISODate();
                 if (this._events.hasOwnProperty(dateKey) && !isOutsideMonth) {
                     events = this._events[dateKey].sort((event1, event2) => {
-                        if (this._calendarEvents[event1].start.toISO() === this._calendarEvents[event2].start.toISO()) {
-                            return this._calendarEvents[event1].calendarSorting < this._calendarEvents[event2].calendarSorting ? 1 : (this._calendarEvents[event1].calendarSorting > this._calendarEvents[event2].calendarSorting) ? -1 : 0;
+                        const a = this._calendarEvents[event1];
+                        const b = this._calendarEvents[event2];
+                        if (a.start.toISO() === b.start.toISO()) {
+                            if (a.fullDay !== b.fullDay) {
+                                return a.fullDay ? -1 : 1;
+                            }
+                            if (a.fullDay) {
+                                const aHasSlot = a._actualSlot !== undefined;
+                                const bHasSlot = b._actualSlot !== undefined;
+                                if (aHasSlot && bHasSlot) {
+                                    return a._actualSlot - b._actualSlot;
+                                }
+                                if (aHasSlot !== bHasSlot) {
+                                    return aHasSlot ? -1 : 1;
+                                }
+                            }
+                            return a.calendarSorting < b.calendarSorting ? 1 : (a.calendarSorting > b.calendarSorting) ? -1 : 0;
                         }
 
-                        return this._calendarEvents[event1].start > this._calendarEvents[event2].start ? 1 : -1;
+                        return a.start > b.start ? 1 : -1;
                     });
 
                     const previousNumberOfEvents = numberOfEvents;
