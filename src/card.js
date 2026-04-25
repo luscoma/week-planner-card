@@ -426,17 +426,38 @@ export class WeekPlannerCard extends LitElement {
             return html``;
         }
 
+        const cols = {
+            xl: parseInt(this._columns.extraLarge) || 7,
+            lg: parseInt(this._columns.large) || 7,
+            md: parseInt(this._columns.medium) || (this._compact ? 7 : 5),
+            sm: parseInt(this._columns.small) || (this._compact ? 4 : 3),
+            xs: parseInt(this._columns.extraSmall) || (this._compact ? 2 : 1),
+        };
+
+        const rowFlags = (i) => {
+            const flag = (n) => ({
+                end: (i + 1) % n === 0 ? 1 : 0,
+                start: i > 0 && i % n === 0 ? 1 : 0,
+            });
+            const xl = flag(cols.xl), lg = flag(cols.lg), md = flag(cols.md), sm = flag(cols.sm), xs = flag(cols.xs);
+            return `--is-row-end-xl:${xl.end};--is-row-start-xl:${xl.start};` +
+                   `--is-row-end-lg:${lg.end};--is-row-start-lg:${lg.start};` +
+                   `--is-row-end-md:${md.end};--is-row-start-md:${md.start};` +
+                   `--is-row-end-sm:${sm.end};--is-row-start-sm:${sm.start};` +
+                   `--is-row-end-xs:${xs.end};--is-row-start-xs:${xs.start};`;
+        };
+
         return html`
-            ${this._days.map((day) => {
+            ${this._days.map((day, index) => {
                 if (day.isOutsideMonth) {
-                    return html`<div class="day ${day.class}"></div>`;
+                    return html`<div class="day ${day.class}" style="${rowFlags(index)}"></div>`;
                 }
 
                 if (this._hideDaysWithoutEvents && day.events.length === 0 && (this._hideTodayWithoutEvents || !this._isToday(day.date))) {
                     return html``;
                 }
                 return html`
-                    <div class="day ${day.class}" data-date="${day.date.day}" data-weekday="${day.date.weekday}" data-month="${day.date.month}" data-year="${day.date.year}" data-week="${day.date.weekNumber}">
+                    <div class="day ${day.class}" style="${rowFlags(index)}" data-date="${day.date.day}" data-weekday="${day.date.weekday}" data-month="${day.date.month}" data-year="${day.date.year}" data-week="${day.date.weekNumber}">
                         <div class="date">
                             ${this._dayFormat ?
                                 unsafeHTML(day.date.toFormat(this._dayFormat)) :
@@ -533,9 +554,14 @@ export class WeekPlannerCard extends LitElement {
         return html`
             ${dayEvents.map((event) => {
                 const doneColors = [event.colors[0]];
+                const bridgeClass = [
+                    event.bridgeStart ? 'bridgeStart' : '',
+                    event.bridgeContinue ? 'bridgeContinue' : '',
+                    event.bridgeContinues ? 'bridgeContinues' : '',
+                ].filter(Boolean).join(' ');
                 return html`
                     <div
-                        class="event ${event.class}"
+                        class="event ${event.class} ${bridgeClass}"
                         data-entity="${event.calendars[0]}"
                         data-additional-entities="${event.calendars.join(',')}"
                         data-summary="${event.summary}"
@@ -599,6 +625,10 @@ export class WeekPlannerCard extends LitElement {
                             ` :
                             ''
                         }
+                        ${event.bridgeContinues ?
+                            html`<div class="bridge"></div>` :
+                            ''
+                        }
                     </div>
                 `
             })}
@@ -614,7 +644,7 @@ export class WeekPlannerCard extends LitElement {
     }
 
     _renderEventTime(event) {
-        if (event.multiDay && this._multiDayMode !== 'default') {
+        if (event.multiDay && this._multiDayMode !== 'default' && this._multiDayMode !== 'combined') {
             return html`
                 ${event.originalStart.toFormat(this._multiDayTimeFormat)}
                 ${' - ' + event.originalEnd.toFormat(this._multiDayTimeFormat)}
@@ -1050,8 +1080,103 @@ export class WeekPlannerCard extends LitElement {
         }
     }
 
+    _computeBridgeMetadata() {
+        Object.values(this._calendarEvents).forEach(event => {
+            event.bridgeStart = false;
+            event.bridgeContinue = false;
+            event.bridgeContinues = false;
+        });
+
+        if (this._multiDayMode !== 'combined') {
+            return;
+        }
+
+        const visibleDateKeys = [];
+        for (let i = 0; i < this._numberOfDays; i++) {
+            visibleDateKeys.push(this._startDate.plus({ days: i }).toISODate());
+        }
+
+        visibleDateKeys.forEach(dateKey => {
+            if (!this._events[dateKey]) {
+                return;
+            }
+            this._events[dateKey].sort((a, b) => this._compareEventsForBridge(a, b));
+        });
+
+        const groups = {};
+        visibleDateKeys.forEach(dateKey => {
+            if (!this._events[dateKey]) {
+                return;
+            }
+            this._events[dateKey].forEach((eventKey, slot) => {
+                const event = this._calendarEvents[eventKey];
+                if (!event || !event.multiDay || !event.fullDay) {
+                    return;
+                }
+                const groupKey = event.originalStart.toISO() + '|' + event.originalEnd.toISO() + '|' + event.summary;
+                if (!groups[groupKey]) {
+                    groups[groupKey] = [];
+                }
+                groups[groupKey].push({ dateKey, eventKey, slot });
+            });
+        });
+
+        Object.values(groups).forEach(instances => {
+            instances.forEach((inst, i) => {
+                const event = this._calendarEvents[inst.eventKey];
+                const prev = i > 0 ? instances[i - 1] : null;
+                const next = i < instances.length - 1 ? instances[i + 1] : null;
+
+                const prevAdjacent = prev && this._isAdjacentDate(prev.dateKey, inst.dateKey);
+                const nextAdjacent = next && this._isAdjacentDate(inst.dateKey, next.dateKey);
+
+                const slotMatchesPrev = prev && prev.slot === inst.slot;
+                const slotMatchesNext = next && next.slot === inst.slot;
+
+                const isSegmentStart = !prev || !prevAdjacent || !slotMatchesPrev;
+                const isSegmentEnd = !next || !nextAdjacent || !slotMatchesNext;
+
+                if (isSegmentStart) {
+                    event.bridgeStart = true;
+                } else {
+                    event.bridgeContinue = true;
+                }
+                if (!isSegmentEnd) {
+                    event.bridgeContinues = true;
+                }
+            });
+        });
+    }
+
+    _compareEventsForBridge(keyA, keyB) {
+        const a = this._calendarEvents[keyA];
+        const b = this._calendarEvents[keyB];
+        if (!a || !b) return 0;
+
+        if (a.fullDay !== b.fullDay) {
+            return a.fullDay ? -1 : 1;
+        }
+
+        if (a.fullDay) {
+            const startCmp = a.originalStart.toMillis() - b.originalStart.toMillis();
+            if (startCmp !== 0) return startCmp;
+            const endCmp = b.originalEnd.toMillis() - a.originalEnd.toMillis();
+            if (endCmp !== 0) return endCmp;
+            return (a.summary || '').localeCompare(b.summary || '');
+        }
+
+        return a.start.toMillis() - b.start.toMillis();
+    }
+
+    _isAdjacentDate(dateKeyA, dateKeyB) {
+        const a = DateTime.fromISO(dateKeyA);
+        const b = DateTime.fromISO(dateKeyB);
+        return Math.round(b.diff(a, 'days').days) === 1;
+    }
+
     _updateCard() {
         this._error = this._calendarErrors.join("\n").trim();
+        this._computeBridgeMetadata();
 
         let days = [];
 

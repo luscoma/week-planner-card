@@ -137,6 +137,9 @@ export class WeekPlannerCardEditor extends LitElement {
                             }, {
                                 value: 'single',
                                 label: 'Single',
+                            }, {
+                                value: 'combined',
+                                label: 'Combined',
                             }
                         ], true)}
                         ${this.addTextField('filter', 'Filter events (regex)')}
